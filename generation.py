@@ -1,5 +1,5 @@
 # Genetic Algorithm for identifying music notes in a wave file
-# Tom Conroy, 7/27/2018
+# Tom Conroy, 7/28/2018
 
 import wave
 import sys
@@ -7,6 +7,7 @@ import binascii
 import random
 import math
 import struct
+import argparse
 
 # Note and their frequencies (A440 tuning)
 frequencies = { 'C1':   32.7,
@@ -105,7 +106,7 @@ def fitness(test_audio, answer_audio, byte_depth):
 # Creates chromosomes, genes being:
 #   frequencies
 #   phase
-def GenerateChromosome(n_samples, sample_rate, bpm, division=1):
+def GenerateChromosome(n_samples, sample_rate, bpm, division):
     min_time = 60.0 / (bpm * division)
     total_time = float(n_samples) / sample_rate
     number_of_smallest_divisions = total_time / min_time
@@ -117,7 +118,7 @@ def GenerateChromosome(n_samples, sample_rate, bpm, division=1):
     return chromosome
 
 # convert chromosomes to audio data samples
-def generate_random_audio(chromosome, n_samples, sample_rate, byte_depth, n_channels, bpm, division=1):
+def generate_random_audio(chromosome, n_samples, sample_rate, byte_depth, n_channels, bpm, division):
     # time in seconds of each division
     min_time = 60.0 / (bpm * division)
     total_time = float(n_samples) / sample_rate
@@ -133,7 +134,7 @@ def generate_random_audio(chromosome, n_samples, sample_rate, byte_depth, n_chan
             s_time = (min_time * s) / samples_per_division
             sample_val = 0
             if byte_depth == 1:
-                sample_val = int(127 * math.sin((2*math.pi*freq*s_time) + phase)) + 128
+                sample_val = int(127 * (math.sin((2*math.pi*freq*s_time) + phase) + (0.5 * math.sin((4*math.pi*freq*s_time) + phase)) + (0.25 * math.sin((6*math.pi*freq*s_time) + phase))) / 1.75) + 128
                 if n_channels == 1:
                     audio_data.append(sample_val)
                 else:
@@ -160,7 +161,7 @@ def ConvertBackToSamples(audio_data):
     return ''.join(chr(b) for b in audio_data)
     
 # randomly change <mutation rate> genes
-def MutateChromosome(chromosome,mutation_rate=0.25):
+def MutateChromosome(chromosome,mutation_rate):
     new_chromosome = []
     for gene in chromosome:
         freq =  gene[0]
@@ -186,13 +187,31 @@ def CrossoverChromosomes(chromosome1,chromosome2):
             phase = gene2[1]
         new_chromosome.append((freq,phase))
     return new_chromosome
+
+# Use argparse to create command line options
+def ParseArguments():
+    parser = argparse.ArgumentParser(description='Feed it a wave file of some music. It will genetically figure out what note (singular) is playing')
+    parser.add_argument('file', help='The wave file of music')
+    parser.add_argument('bpm', type=int, help='The number of beats per minute of the music')
+    parser.add_argument('divisions', type=int, help='The largest number of divisions of a beat, e.g. if the music contains 16th notes, they (usually) divide the beat by 4')
+    parser.add_argument('--initial-population', type=int, help='The size of the initial population (default 30)')
+    parser.add_argument('--generations', type=int, help='The number of generations to complete')
+    parser.add_argument('--mutation-rate', help='How often genes change. Give as a decimal less than 1, e.g. 0.2')
+    argNamespace = parser.parse_args()
+    args = vars(argNamespace)
+    if args['initial_population'] is None:
+        args['initial_population'] = 30
+    if args['generations'] is None:
+        args['generations'] = 20
+    if args['mutation_rate'] is None:
+        args['mutation_rate'] = 0.25
+    return args
     
 def RunGenerations():
-    if len(sys.argv) != 3:
-        print 'Error: Expected wave file argument and bpm'
-        sys.exit()
-    audio_file_name = sys.argv[1]
-    bpm = int(sys.argv[2])
+    args = ParseArguments()
+    audio_file_name = args['file']
+    bpm = args['bpm']
+    divisions = args['divisions']
     audio_file = wave.open(audio_file_name, 'r')
     n_frames = audio_file.getnframes()
     byte_depth = audio_file.getsampwidth()
@@ -211,9 +230,10 @@ def RunGenerations():
     test_datas = []
     fitnesses = []
     # generate initial population
-    for i in range(10): # initial population size
-        chromosome = GenerateChromosome(n_frames, framerate, bpm)
-        test_data = generate_random_audio(chromosome, n_frames, framerate, byte_depth, n_channels, bpm)
+    for i in range(args['initial_population']): # initial population size
+        chromosome = GenerateChromosome(n_frames, framerate, bpm, divisions)
+        
+        test_data = generate_random_audio(chromosome, n_frames, framerate, byte_depth, n_channels, bpm, divisions)
         chromosomes.append(chromosome)
         test_datas.append(test_data)
         fitnesses.append(fitness(test_data, audio_data, byte_depth))
@@ -222,8 +242,8 @@ def RunGenerations():
     new_chromosomes = []
     new_test_datas = []
     new_fitnesses = []
-    for pop in range(5): # number of populations
-        print 'Running Population #%d' % pop
+    for gen in range(args['generations']): # number of populations
+        print 'Running Generation #%d' % (gen+1)
         sorted_fitnesses = sorted(fitnesses)
         sorted_chromosomes = []
         for f in sorted_fitnesses:
@@ -235,7 +255,7 @@ def RunGenerations():
             
             # mutate a couple
             for i in range(2):
-                chromosome = MutateChromosome(c)
+                chromosome = MutateChromosome(c, args['mutation_rate'])
                 new_chromosomes.append(chromosome)
                 
             # cross a couple over with it
@@ -248,7 +268,7 @@ def RunGenerations():
             new_chromosomes.append(chromosome)
             
         for c in new_chromosomes:
-            test_data = generate_random_audio(c, n_frames, framerate, byte_depth, n_channels, bpm)
+            test_data = generate_random_audio(c, n_frames, framerate, byte_depth, n_channels, bpm, divisions)
             new_test_datas.append(test_data)
             new_fitnesses.append(fitness(test_data, audio_data, byte_depth))
         
@@ -259,7 +279,13 @@ def RunGenerations():
         new_test_datas = []
         new_fitnesses = []
         print 'Min Fitness: %d' % min(fitnesses)
-        
+    
+    c = chromosomes[0]
+    print 'Done!'
+    print 'Notes',
+    for gene in c:
+        print frequencies.keys()[frequencies.values().index(gene[0])],
+    print ''
     export_audio = ConvertBackToSamples(test_datas[0])
     export_wave_file = wave.open('export.wav', 'w')
     export_wave_file.setnchannels(n_channels)
