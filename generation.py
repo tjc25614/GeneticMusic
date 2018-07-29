@@ -8,6 +8,10 @@ import random
 import math
 import struct
 import argparse
+from multiprocessing import Pool
+from functools import partial
+import time, datetime
+import signal
 
 # Note and their frequencies (A440 tuning)
 frequencies = { 'C1':   32.7,
@@ -83,6 +87,10 @@ frequencies = { 'C1':   32.7,
                 'A#6':  1864.66,
                 'B6':   1975.53}
 
+# Ignore KeyboardInterrupt in pool
+def init_worker():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    
 # Compares samples of two lists of samples and produces a fitness score
 def fitness(test_audio, answer_audio, byte_depth):
     if len(test_audio) != len(answer_audio):
@@ -194,11 +202,14 @@ def ParseArguments():
     parser.add_argument('file', help='The wave file of music')
     parser.add_argument('bpm', type=int, help='The number of beats per minute of the music')
     parser.add_argument('divisions', type=int, help='The largest number of divisions of a beat, e.g. if the music contains 16th notes, they (usually) divide the beat by 4')
+    parser.add_argument('--max-threads', type=int, help='Max number of threads to at once (default 2)')
     parser.add_argument('--initial-population', type=int, help='The size of the initial population (default 30)')
     parser.add_argument('--generations', type=int, help='The number of generations to complete')
     parser.add_argument('--mutation-rate', help='How often genes change. Give as a decimal less than 1, e.g. 0.2')
     argNamespace = parser.parse_args()
     args = vars(argNamespace)
+    if args['max_threads'] is None:
+        args['max_threads'] = 2
     if args['initial_population'] is None:
         args['initial_population'] = 30
     if args['generations'] is None:
@@ -216,77 +227,88 @@ def RunGenerations():
     n_frames = audio_file.getnframes()
     byte_depth = audio_file.getsampwidth()
     n_channels = audio_file.getnchannels()
+    print 'Running note recognition on file: %s' % audio_file_name
     print 'Audio file has %s samples' % n_frames
     print 'Number of channels: %d' % n_channels
     print 'Sample width (bytes): %d' % byte_depth
+    print 'Initial Population Size: %d' % args['initial_population']
+    print 'Number of Generations: %d' % args['generations']
     audio_data_string = audio_file.readframes(n_frames)
     framerate = audio_file.getframerate()
     
     audio_data = []
     for sample in audio_data_string:
         audio_data.append(ord(sample))
-    print 'Length of audio data: %d' % len(audio_data)
     chromosomes = []
     test_datas = []
     fitnesses = []
-    # generate initial population
-    for i in range(args['initial_population']): # initial population size
-        chromosome = GenerateChromosome(n_frames, framerate, bpm, divisions)
-        
-        test_data = generate_random_audio(chromosome, n_frames, framerate, byte_depth, n_channels, bpm, divisions)
-        chromosomes.append(chromosome)
-        test_datas.append(test_data)
-        fitnesses.append(fitness(test_data, audio_data, byte_depth))
     
-    # run populations
-    new_chromosomes = []
-    new_test_datas = []
-    new_fitnesses = []
-    for gen in range(args['generations']): # number of populations
-        print 'Running Generation #%d' % (gen+1)
-        sorted_fitnesses = sorted(fitnesses)
-        sorted_chromosomes = []
-        for f in sorted_fitnesses:
-            c_index = fitnesses.index(f)
-            sorted_chromosomes.append(chromosomes[c_index])
-        for c in sorted_chromosomes[:len(sorted_chromosomes)//6]:
-            chromosome = c
-            new_chromosomes.append(chromosome)
-            
-            # mutate a couple
-            for i in range(2):
-                chromosome = MutateChromosome(c, args['mutation_rate'])
-                new_chromosomes.append(chromosome)
-                
-            # cross a couple over with it
-            for i in range(2):
-                chromosome = CrossoverChromosomes(c, random.choice(sorted_chromosomes))
-                new_chromosomes.append(chromosome)
-                
-            # pick a random one (lucky survivor)
-            chromosome = random.choice(sorted_chromosomes)
-            new_chromosomes.append(chromosome)
-            
-        for c in new_chromosomes:
-            test_data = generate_random_audio(c, n_frames, framerate, byte_depth, n_channels, bpm, divisions)
-            new_test_datas.append(test_data)
-            new_fitnesses.append(fitness(test_data, audio_data, byte_depth))
+    pool = Pool(args['max_threads'], init_worker)
+    try:
+        # generate initial population
+        print 'Generating Initial Population...'
+        start_time = time.time()
+        for i in range(args['initial_population']): # initial population size
+            chromosome = GenerateChromosome(n_frames, framerate, bpm, divisions)
+            chromosomes.append(chromosome)
+        test_datas = pool.map(partial(generate_random_audio, n_samples=n_frames, sample_rate=framerate, byte_depth=byte_depth, n_channels=n_channels, bpm=bpm, division=divisions), chromosomes)
         
-        chromosomes = new_chromosomes
-        test_datas = new_test_datas
-        fitnesses = new_fitnesses
+        fitnesses = pool.map(partial(fitness, answer_audio=audio_data, byte_depth=byte_depth), test_datas)   
+
+        # run populations
         new_chromosomes = []
         new_test_datas = []
         new_fitnesses = []
-        print 'Min Fitness: %d' % min(fitnesses)
-    
+        for gen in range(args['generations']): # number of populations
+            current_time = time.time()
+            print 'Elapsed Time: %s' % (datetime.timedelta(seconds=int(current_time - start_time)))
+            print 'Running Generation #%d' % (gen+1)
+            sorted_fitnesses = sorted(fitnesses)
+            sorted_chromosomes = []
+            for f in sorted_fitnesses:
+                c_index = fitnesses.index(f)
+                sorted_chromosomes.append(chromosomes[c_index])
+            for c in sorted_chromosomes[:len(sorted_chromosomes)//(args['initial_population']//6)]:
+                chromosome = c
+                new_chromosomes.append(chromosome)
+                
+                # mutate a couple
+                for i in range(2):
+                    chromosome = MutateChromosome(c, args['mutation_rate'])
+                    new_chromosomes.append(chromosome)
+                    
+                # cross a couple over with it
+                for i in range(2):
+                    chromosome = CrossoverChromosomes(c, random.choice(sorted_chromosomes))
+                    new_chromosomes.append(chromosome)
+                    
+                # pick a random one (lucky survivor)
+                chromosome = random.choice(sorted_chromosomes)
+                new_chromosomes.append(chromosome)
+                
+            new_test_datas = pool.map(partial(generate_random_audio, n_samples=n_frames, sample_rate=framerate, byte_depth=byte_depth, n_channels=n_channels, bpm=bpm, division=divisions), new_chromosomes)
+            
+            new_fitnesses = pool.map(partial(fitness, answer_audio=audio_data, byte_depth=byte_depth), new_test_datas)
+            
+            chromosomes = new_chromosomes
+            test_datas = new_test_datas
+            fitnesses = new_fitnesses
+            new_chromosomes = []
+            new_test_datas = []
+            new_fitnesses = []
+            print 'Min Fitness: %d' % min(fitnesses)
+    except KeyboardInterrupt:
+        print 'Keyboard Interrupt! Exiting!'
+        
     c = chromosomes[0]
+    final_audio = generate_random_audio(c, n_samples=n_frames, sample_rate=framerate, byte_depth=byte_depth, n_channels=n_channels, bpm=bpm, division=divisions)
+    
     print 'Done!'
-    print 'Notes',
+    print 'Notes:',
     for gene in c:
         print frequencies.keys()[frequencies.values().index(gene[0])],
     print ''
-    export_audio = ConvertBackToSamples(test_datas[0])
+    export_audio = ConvertBackToSamples(final_audio)
     export_wave_file = wave.open('export.wav', 'w')
     export_wave_file.setnchannels(n_channels)
     export_wave_file.setsampwidth(byte_depth)
