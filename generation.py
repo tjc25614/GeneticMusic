@@ -202,14 +202,14 @@ def ParseArguments():
     parser.add_argument('file', help='The wave file of music')
     parser.add_argument('bpm', type=int, help='The number of beats per minute of the music')
     parser.add_argument('divisions', type=int, help='The largest number of divisions of a beat, e.g. if the music contains 16th notes, they (usually) divide the beat by 4')
-    parser.add_argument('--max-threads', type=int, help='Max number of threads to at once (default 2)')
-    parser.add_argument('--initial-population', type=int, help='The size of the initial population (default 30)')
-    parser.add_argument('--generations', type=int, help='The number of generations to complete')
-    parser.add_argument('--mutation-rate', help='How often genes change. Give as a decimal less than 1, e.g. 0.2')
+    parser.add_argument('-p', '--max-processes', type=int, help='Max number of threads to at once (default 2)')
+    parser.add_argument('-i', '--initial-population', type=int, help='The size of the initial population (default 30)')
+    parser.add_argument('-g', '--generations', type=int, help='The number of generations to complete')
+    parser.add_argument('-m', '--mutation-rate', help='How often genes change. Give as a decimal less than 1, e.g. 0.2')
     argNamespace = parser.parse_args()
     args = vars(argNamespace)
-    if args['max_threads'] is None:
-        args['max_threads'] = 2
+    if args['max_processes'] is None:
+        args['max_processes'] = 2
     if args['initial_population'] is None:
         args['initial_population'] = 30
     if args['generations'] is None:
@@ -243,7 +243,8 @@ def RunGenerations():
     test_datas = []
     fitnesses = []
     
-    pool = Pool(args['max_threads'], init_worker)
+    print 'Use ^C to exit, it will wait for the current generation to finish.'
+    pool = Pool(args['max_processes'], init_worker)
     try:
         # generate initial population
         print 'Generating Initial Population...'
