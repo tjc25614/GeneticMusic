@@ -147,7 +147,7 @@ def ParseArguments():
     parser.add_argument('file', help='The wave file of music')
     parser.add_argument('bpm', type=int, help='The number of beats per minute of the music')
     parser.add_argument('divisions', type=int, help='The largest number of divisions of a beat, e.g. if the music contains 16th notes, they (usually) divide the beat by 4')
-    parser.add_argument('-v', '--voices', type=int help='The number of voices to pull from the audio')
+    parser.add_argument('-v', '--voices', type=int, help='The number of voices to pull from the audio')
     parser.add_argument('-o', '--output-file', help='File which to output generated audio')
     argNamespace = parser.parse_args()
     args = vars(argNamespace)
@@ -160,7 +160,8 @@ def RunAnalysis():
     divisions = args['divisions']
     voices = 5
     if 'voices' in args.keys():
-        voices = args['voices']
+        if args['voices'] is not None:
+            voices = args['voices']
     audio_file = wave.open(audio_file_name, 'rb')
     n_frames = audio_file.getnframes()
     byte_depth = audio_file.getsampwidth()
